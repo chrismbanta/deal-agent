@@ -1,0 +1,607 @@
+{
+  "name": "Deal Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {}
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -1200,
+        416
+      ],
+      "id": "ad757604-659d-41de-a7f5-92e277f97281",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "YOUR_GOOGLE_SHEET_URL"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "CRM Closed Opps"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -976,
+        208
+      ],
+      "id": "2e5c6a73-5f1c-4478-8657-8d401ab4ba45",
+      "name": "Read CRM Data"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "crm-source-label",
+              "name": "_source",
+              "value": "crm",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -752,
+        208
+      ],
+      "id": "f1a2b3c4-d5e6-7890-abcd-ef1234567890",
+      "name": "Label CRM Data"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "YOUR_GOOGLE_SHEET_URL"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Gong Calls"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -976,
+        624
+      ],
+      "id": "a1b2c3d4-e5f6-7890-1234-abcdef567890",
+      "name": "Read Gong Calls"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "gong-source-label",
+              "name": "_source",
+              "value": "gong",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -752,
+        624
+      ],
+      "id": "b2c3d4e5-f6a7-8901-2345-bcdef6789012",
+      "name": "Label Gong Data"
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        -528,
+        416
+      ],
+      "id": "c3d4e5f6-a7b8-9012-3456-cdef78901234",
+      "name": "Merge CRM + Gong"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// ============================================\n// DEAL AGENT: ICP DATA PRE-PROCESSOR\n// CRM closed opportunities + Gong call intelligence\n// ============================================\n\n// ---- CONFIG: the only block you need to edit ----\nconst CONFIG = {\n  companyName: 'Your Company',\n  productName: 'Your Product',\n  // Gong rows are kept only if their Product Line contains one of these (lowercase).\n  // Leave the array empty to analyse every call.\n  productLineMatch: ['your product line'],\n  // One or two sentences the AI uses to reason about why buyers buy:\n  // who buys, what triggers the purchase, what it replaces.\n  productContext: 'Describe your product, its buyer types and the triggers that start a purchase.',\n  // Competitors the AI may extrapolate from when Gong competitor mentions are sparse.\n  knownCompetitors: 'your known competitors, plus spreadsheets and manual processes',\n};\n\nconst allItems = $input.all().map(item => item.json);\n\n// Separate CRM and Gong data by _source label\nconst crmItems = allItems.filter(i => i._source === 'crm');\nconst gongAll  = allItems.filter(i => i._source === 'gong');\n\n// Filter Gong to the configured product line\nconst gongItems = gongAll.filter(i => {\n  if (!CONFIG.productLineMatch.length) return true;\n  const pl = (i['Product Line'] || '').toLowerCase();\n  return CONFIG.productLineMatch.some(m => pl.includes(m));\n});\n\nconsole.log('CRM items: ' + crmItems.length +\n  ', Gong (all): ' + gongAll.length +\n  ', Gong (product line): ' + gongItems.length);\n\n// ============================================\n// STEP 1: FILTER WON / LOST (CRM)\n// ============================================\n\nconst wonDataRaw  = crmItems.filter(item => (item['Opportunity.Stage Name'] || '').trim() === 'Closed Won');\nconst lostDataRaw = crmItems.filter(item => (item['Opportunity.Stage Name'] || '').trim() === 'Closed Lost');\n\nconsole.log('Raw CRM: ' + crmItems.length + ' total, ' + wonDataRaw.length + ' Won, ' + lostDataRaw.length + ' Lost');\n\n// ============================================\n// STEP 2: AMENDMENT EXCLUSION\n// ============================================\n\nconst isAmendment = (row) => (row['Opportunity.Record_Type_Name_C'] || '').trim() === 'Amendment';\n\nconst wonData    = wonDataRaw.filter(r  => !isAmendment(r));\nconst lostData   = lostDataRaw.filter(r => !isAmendment(r));\nconst amendExWon  = wonDataRaw.length  - wonData.length;\nconst amendExLost = lostDataRaw.length - lostData.length;\n\nconsole.log('Amendments excluded: Won -' + amendExWon + ', Lost -' + amendExLost);\n\n// ============================================\n// HELPERS\n// ============================================\n\nconst sum        = arr => arr.reduce((a, b) => a + b, 0);\nconst pct        = (num, denom) => denom ? ((num / denom) * 100).toFixed(1) : '0.0';\nconst currencyK  = num => {\n  const val = num || 0;\n  if (val >= 1000000) return '$' + (val / 1000000).toFixed(1) + 'm';\n  if (val >= 1000)    return '$' + (val / 1000).toFixed(1) + 'k';\n  return '$' + Math.round(val).toLocaleString();\n};\nconst safeStr    = val => (val || '').toString().trim();\nconst avgNonZero = arr => {\n  const valid = arr.filter(v => v !== null && v !== undefined && v > 0);\n  return valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null;\n};\n\n// Parse ARR: \"USD 24,203.64\" -> number\nconst parseARR = (val) => {\n  if (!val) return 0;\n  const cleaned = val.toString().replace(/^USD\\s*/i, '').replace(/,/g, '');\n  const n = parseFloat(cleaned);\n  return isNaN(n) ? 0 : n;\n};\n\n// ============================================\n// CLASSIFICATION FUNCTIONS\n// ============================================\n\nconst getFTEBand = (row) => {\n  const size = safeStr(row['Size']).toLowerCase();\n  if (size.match(/^1 emp/) || size.includes('2-10') || size.includes('1-10')) return '1-10 FTEs';\n  if (size.includes('11-50'))  return '11-50 FTEs';\n  if (size.includes('51-200')) return '51-200 FTEs';\n  if (size.includes('201-500')) return '201-500 FTEs';\n  if (size.includes('501') || size.includes('1,001') || size.includes('5,001') || size.includes('10,001')) return '500+ FTEs';\n  const emp = parseInt(row['Number Of Employees']) || 0;\n  if (emp === 0)   return 'Unknown';\n  if (emp <= 10)   return '1-10 FTEs';\n  if (emp <= 50)   return '11-50 FTEs';\n  if (emp <= 200)  return '51-200 FTEs';\n  if (emp <= 500)  return '201-500 FTEs';\n  return '500+ FTEs';\n};\n\nconst getUSState       = (row) => { const s = safeStr(row['State']); return s.length >= 2 ? s : 'Unknown'; };\nconst getCountry       = (row) => safeStr(row['Country']) || 'Unknown';\nconst getIndustry      = (row) => {\n  const ind2 = safeStr(row['Industry (2)']);\n  if (ind2.length > 2) return ind2;\n  const ind1 = safeStr(row['Industry']);\n  return ind1.length > 2 ? (ind1.length > 50 ? ind1.substring(0, 50) : ind1) : 'Unknown';\n};\nconst getOwnershipType = (row) => {\n  const ct = safeStr(row['Company Type']).toLowerCase();\n  if (ct.includes('public'))    return 'Public';\n  if (ct.includes('privately') || ct === 'private') return 'Private';\n  if (ct.includes('partnership')) return 'Partnership';\n  if (ct.includes('nonprofit') || ct.includes('non-profit')) return 'Nonprofit';\n  if (ct.includes('government')) return 'Government';\n  return ct.length > 1 ? safeStr(row['Company Type']) : 'Unknown';\n};\nconst getCustomerType  = (row) => {\n  const type = safeStr(row['Type']);\n  return (type === 'New Customer' || type === 'Existing Customer') ? type : 'Unknown';\n};\nconst getRevenueBand   = (row) => safeStr(row['Annual Revenue']) || 'Unknown';\n\n// ============================================\n// OVERALL AVERAGES (for ICP Scoring)\n// ============================================\n\nconst overallCvR     = (wonData.length / (wonData.length + lostData.length)) * 100;\nconst overallARRVals = wonData.map(r => parseARR(r['Opportunity.Annualized_Bookings_Conversion_C.CONVERT'])).filter(v => v > 0);\nconst overallAvgARR  = avgNonZero(overallARRVals) || 0;\n\nconsole.log('Overall CvR: ' + overallCvR.toFixed(1) + '%, Overall Avg ARR: ' + currencyK(overallAvgARR));\n\n// ============================================\n// SEGMENT METRICS CALCULATOR\n// ============================================\n\nconst calculateSegmentMetrics = (wonInSeg, lostInSeg, segName) => {\n  const totalOpps = wonInSeg.length + lostInSeg.length;\n  const wonCount  = wonInSeg.length;\n  const cvr       = totalOpps > 0 ? (wonCount / totalOpps) * 100 : 0;\n  const arrVals   = wonInSeg.map(r => parseARR(r['Opportunity.Annualized_Bookings_Conversion_C.CONVERT'])).filter(v => v > 0);\n  const totalARR  = sum(arrVals);\n  const avgARR    = avgNonZero(arrVals);\n  const weightedVal = avgARR ? (cvr / 100) * avgARR : 0;\n  const cvrNorm   = overallCvR > 0 ? (cvr / overallCvR) : 1;\n  const arrNorm   = overallAvgARR > 0 && avgARR ? (avgARR / overallAvgARR) : 1;\n  const icpScoreRaw = (0.6 * cvrNorm) + (0.4 * arrNorm);\n  const icpIndex    = Math.round(icpScoreRaw * 100);\n  let icpScore = 'NEUTRAL', icpSymbol = '--';\n  if (icpScoreRaw > 1.10) { icpScore = 'PRIORITISE';   icpSymbol = '^'; }\n  else if (icpScoreRaw < 0.90) { icpScore = 'DEPRIORITISE'; icpSymbol = 'v'; }\n  return {\n    segment: segName, totalOpps, wonCount,\n    cvr: cvr.toFixed(1) + '%', cvrRaw: cvr,\n    totalARR: currencyK(totalARR),\n    avgARR: avgARR ? currencyK(avgARR) : 'N/A', avgARRRaw: avgARR || 0,\n    weightedValue: currencyK(weightedVal),\n    icpScore, icpSymbol, icpScoreRaw, icpIndex\n  };\n};\n\n// Table generator (with Index column)\nconst generateTable = (rows, title) => {\n  let t = '| ' + title + ' | Total Opps | Won # | CvR | Total ARR | Avg ARR | CvR x Avg ARR | Index | ICP Score |\\n';\n  t += '|---|---|---|---|---|---|---|---|---|\\n';\n  rows.forEach(r => {\n    t += '| ' + r.segment + ' | ' + r.totalOpps + ' | ' + r.wonCount + ' | ' + r.cvr + ' | ' + r.totalARR + ' | ' + r.avgARR + ' | ' + r.weightedValue + ' | ' + r.icpIndex + ' | ' + r.icpSymbol + ' ' + r.icpScore + ' |\\n';\n  });\n  return t;\n};\n\n// Group small segments into \"Other\"\nconst groupSmall = (metricsArr, threshold, wonD, lostD, classifyFn) => {\n  const large = metricsArr.filter(m => m.totalOpps >= threshold);\n  const small = metricsArr.filter(m => m.totalOpps > 0 && m.totalOpps < threshold);\n  if (!small.length) return { segments: large, otherNote: '' };\n  const oWon = [], oLost = [], names = [];\n  small.forEach(seg => {\n    names.push(seg.segment + ' (' + seg.totalOpps + ')');\n    wonD.forEach(r  => { if (classifyFn(r) === seg.segment) oWon.push(r); });\n    lostD.forEach(r => { if (classifyFn(r) === seg.segment) oLost.push(r); });\n  });\n  if (oWon.length + oLost.length > 0) large.push(calculateSegmentMetrics(oWon, oLost, 'Other'));\n  return { segments: large, otherNote: '*\"Other\" includes ' + small.length + ' segments with <' + threshold + ' opportunities: ' + names.join(', ') + '*' };\n};\n\n// ============================================\n// DATASET OVERVIEW\n// ============================================\n\nconst totalDataset = crmItems.length;\nconst totalWon     = wonData.length;\nconst totalLost    = lostData.length;\nconst totalRecords = totalWon + totalLost;\n\nconst allARR     = wonData.map(r => parseARR(r['Opportunity.Annualized_Bookings_Conversion_C.CONVERT'])).filter(v => v > 0);\nconst totalARRAll = sum(allARR);\nconst avgARRAll   = avgNonZero(allARR) || 0;\n\nconst enrichRate = (field, minLen = 2) => pct(wonData.filter(r => safeStr(r[field]).length > minLen).length, totalWon);\n\n// ============================================\n// PAGE: FTE BAND ANALYSIS\n// ============================================\n\nconst FTE_MIN     = 5;\nconst fteBands    = ['1-10 FTEs', '11-50 FTEs', '51-200 FTEs', '201-500 FTEs', '500+ FTEs'];\nconst fteMetricsAll = fteBands.map(b => calculateSegmentMetrics(\n  wonData.filter(r  => getFTEBand(r) === b),\n  lostData.filter(r => getFTEBand(r) === b), b\n)).filter(m => m.totalOpps > 0);\nconst fteGrouped  = groupSmall(fteMetricsAll, FTE_MIN, wonData, lostData, getFTEBand);\nconst fteMetrics  = [...fteGrouped.segments, calculateSegmentMetrics(wonData, lostData, '**TOTAL**')];\nconst fteTable    = generateTable(fteMetrics, 'FTE Band');\nconst fteData     = fteMetrics.filter(m => !['**TOTAL**', 'Other'].includes(m.segment));\nconst topFTEByCvR  = [...fteData].sort((a, b) => b.cvrRaw    - a.cvrRaw)[0];\nconst topFTEByARR  = [...fteData].sort((a, b) => b.avgARRRaw - a.avgARRRaw)[0];\nconst topFTEByVol  = [...fteData].sort((a, b) => b.wonCount  - a.wonCount)[0];\nconst prioritisedFTE    = fteData.filter(m => m.icpScore === 'PRIORITISE').map(m => m.segment).join(', ')   || 'None';\nconst deprioritisedFTE  = fteData.filter(m => m.icpScore === 'DEPRIORITISE').map(m => m.segment).join(', ') || 'None';\n\n// ============================================\n// PAGE: GEOGRAPHY ANALYSIS\n// ============================================\n\nconst stateMap = {};\n[...wonData, ...lostData].forEach(row => {\n  const country = safeStr(row['Country']).toLowerCase();\n  if (!['united states', 'us', 'usa'].includes(country)) return;\n  const state = getUSState(row);\n  if (!state || state === 'Unknown') return;\n  if (!stateMap[state]) stateMap[state] = { won: [], lost: [] };\n  if (safeStr(row['Opportunity.Stage Name']) === 'Closed Won') stateMap[state].won.push(row);\n  else stateMap[state].lost.push(row);\n});\n\nconst GEO_MIN = 3;\nconst stateMetricsAll = Object.entries(stateMap)\n  .map(([s, d]) => calculateSegmentMetrics(d.won, d.lost, s))\n  .sort((a, b) => b.wonCount - a.wonCount);\nconst stateGrouped = groupSmall(stateMetricsAll, GEO_MIN, wonData, lostData, r => {\n  const c = safeStr(r['Country']).toLowerCase();\n  if (!['united states', 'us', 'usa'].includes(c)) return null;\n  return getUSState(r);\n});\n\nconst usWon  = wonData.filter(r  => ['united states', 'us', 'usa'].includes(safeStr(r['Country']).toLowerCase()));\nconst usLost = lostData.filter(r => ['united states', 'us', 'usa'].includes(safeStr(r['Country']).toLowerCase()));\nconst stateMetrics = [\n  ...stateGrouped.segments.sort((a, b) => {\n    if (a.segment === 'Other') return 1;\n    if (b.segment === 'Other') return -1;\n    return b.wonCount - a.wonCount;\n  }),\n  calculateSegmentMetrics(usWon, usLost, '**US TOTAL**')\n];\nconst stateTable       = generateTable(stateMetrics, 'US State');\nconst prioritisedState   = stateMetrics.filter(m => m.icpScore === 'PRIORITISE'   && !['**US TOTAL**', 'Other'].includes(m.segment)).map(m => m.segment).join(', ') || 'None';\nconst deprioritisedState = stateMetrics.filter(m => m.icpScore === 'DEPRIORITISE' && !['**US TOTAL**', 'Other'].includes(m.segment)).map(m => m.segment).join(', ') || 'None';\n\nconst countryMapData = {};\n[...wonData, ...lostData].forEach(row => {\n  const c = getCountry(row);\n  if (!c || c === 'Unknown') return;\n  if (!countryMapData[c]) countryMapData[c] = { won: [], lost: [] };\n  if (safeStr(row['Opportunity.Stage Name']) === 'Closed Won') countryMapData[c].won.push(row);\n  else countryMapData[c].lost.push(row);\n});\nconst countryMetrics = [\n  ...Object.entries(countryMapData)\n    .map(([c, d]) => calculateSegmentMetrics(d.won, d.lost, c))\n    .sort((a, b) => b.wonCount - a.wonCount).slice(0, 15),\n  calculateSegmentMetrics(wonData, lostData, '**TOTAL**')\n];\nconst countryTable = generateTable(countryMetrics, 'Country');\n\n// ============================================\n// PAGE: INDUSTRY ANALYSIS\n// ============================================\n\nconst IND_MIN = 5;\nconst indMap  = {};\n[...wonData, ...lostData].forEach(row => {\n  const ind = getIndustry(row);\n  if (ind === 'Unknown') return;\n  if (!indMap[ind]) indMap[ind] = { won: [], lost: [] };\n  if (safeStr(row['Opportunity.Stage Name']) === 'Closed Won') indMap[ind].won.push(row);\n  else indMap[ind].lost.push(row);\n});\nconst indMetricsAll = Object.entries(indMap)\n  .map(([i, d]) => calculateSegmentMetrics(d.won, d.lost, i))\n  .sort((a, b) => b.wonCount - a.wonCount);\nconst largeInd = indMetricsAll.filter(m => m.totalOpps >= IND_MIN).slice(0, 20);\nconst smallInd = indMetricsAll.filter(m => m.totalOpps > 0 && m.totalOpps < IND_MIN);\nlet indOtherNote = '';\nif (smallInd.length) {\n  const oW = [], oL = [];\n  smallInd.forEach(s => { if (indMap[s.segment]) { oW.push(...indMap[s.segment].won); oL.push(...indMap[s.segment].lost); } });\n  if (oW.length + oL.length > 0) largeInd.push(calculateSegmentMetrics(oW, oL, 'Other'));\n  indOtherNote = '*\"Other\" includes ' + smallInd.length + ' industries with <' + IND_MIN + ' opportunities each*';\n}\nconst knownIndWon  = wonData.filter(r  => getIndustry(r) !== 'Unknown');\nconst knownIndLost = lostData.filter(r => getIndustry(r) !== 'Unknown');\nlargeInd.push(calculateSegmentMetrics(knownIndWon, knownIndLost, '**TOTAL**'));\nconst indTable          = generateTable(largeInd, 'Industry');\nconst prioritisedInd    = largeInd.filter(m => m.icpScore === 'PRIORITISE'   && !['**TOTAL**', 'Other'].includes(m.segment)).map(m => m.segment).join(', ') || 'None';\nconst deprioritisedInd  = largeInd.filter(m => m.icpScore === 'DEPRIORITISE' && !['**TOTAL**', 'Other'].includes(m.segment)).map(m => m.segment).join(', ') || 'None';\n\n// ============================================\n// PAGE: COMPANY TYPE ANALYSIS\n// ============================================\n\nconst OWN_MIN  = 5;\nconst ownTypes = ['Public', 'Private', 'Partnership', 'Nonprofit', 'Government'];\nconst ownMetricsAll = ownTypes.map(t => calculateSegmentMetrics(\n  wonData.filter(r  => getOwnershipType(r) === t),\n  lostData.filter(r => getOwnershipType(r) === t), t\n)).filter(m => m.totalOpps > 0);\nconst ownGrouped = groupSmall(ownMetricsAll, OWN_MIN, wonData, lostData, getOwnershipType);\nconst ownMetrics = [\n  ...ownGrouped.segments.sort((a, b) => {\n    if (a.segment === 'Other') return 1; if (b.segment === 'Other') return -1;\n    return b.wonCount - a.wonCount;\n  }),\n  calculateSegmentMetrics(wonData, lostData, '**TOTAL**')\n];\nconst ownTable          = generateTable(ownMetrics, 'Company Type');\nconst prioritisedOwn    = ownMetrics.filter(m => m.icpScore === 'PRIORITISE'   && !['**TOTAL**', 'Other'].includes(m.segment)).map(m => m.segment).join(', ') || 'None';\nconst deprioritisedOwn  = ownMetrics.filter(m => m.icpScore === 'DEPRIORITISE' && !['**TOTAL**', 'Other'].includes(m.segment)).map(m => m.segment).join(', ') || 'None';\n\n// ============================================\n// PAGE: CUSTOMER TYPE ANALYSIS\n// ============================================\n\nconst custTypes = ['New Customer', 'Existing Customer'];\nconst custMetrics = custTypes.map(t => calculateSegmentMetrics(\n  wonData.filter(r  => getCustomerType(r) === t),\n  lostData.filter(r => getCustomerType(r) === t), t\n)).filter(m => m.totalOpps > 0);\nconst unkCustWon  = wonData.filter(r  => getCustomerType(r) === 'Unknown');\nconst unkCustLost = lostData.filter(r => getCustomerType(r) === 'Unknown');\nif (unkCustWon.length + unkCustLost.length > 0) custMetrics.push(calculateSegmentMetrics(unkCustWon, unkCustLost, 'Unknown'));\ncustMetrics.push(calculateSegmentMetrics(wonData, lostData, '**TOTAL**'));\nconst custTable = generateTable(custMetrics, 'Customer Type');\n\n// ============================================\n// PAGE: ANNUAL REVENUE BAND ANALYSIS\n// ============================================\n\nconst REV_MIN     = 3;\nconst revMapData  = {};\n[...wonData, ...lostData].forEach(row => {\n  const rev = getRevenueBand(row);\n  if (!rev || rev === 'Unknown' || rev === '') return;\n  if (!revMapData[rev]) revMapData[rev] = { won: [], lost: [] };\n  if (safeStr(row['Opportunity.Stage Name']) === 'Closed Won') revMapData[rev].won.push(row);\n  else revMapData[rev].lost.push(row);\n});\nconst revOrder = ['Less Than 1M', '1M-5M', '5M-10M', '10M-25M', '25M-50M', '50M-75M', '75M-200M', '200M-1B', '1B-10B', '10B+'];\nconst revMetricsAll = Object.entries(revMapData)\n  .map(([r, d]) => calculateSegmentMetrics(d.won, d.lost, r))\n  .sort((a, b) => {\n    const ai = revOrder.indexOf(a.segment), bi = revOrder.indexOf(b.segment);\n    if (ai === -1 && bi === -1) return b.wonCount - a.wonCount;\n    if (ai === -1) return 1; if (bi === -1) return -1; return ai - bi;\n  });\nconst revGrouped    = groupSmall(revMetricsAll, REV_MIN, wonData, lostData, getRevenueBand);\nconst knownRevWon   = wonData.filter(r  => getRevenueBand(r) !== 'Unknown' && getRevenueBand(r) !== '');\nconst knownRevLost  = lostData.filter(r => getRevenueBand(r) !== 'Unknown' && getRevenueBand(r) !== '');\nconst revMetrics    = [...revGrouped.segments, calculateSegmentMetrics(knownRevWon, knownRevLost, '**TOTAL**')];\nconst revTable          = generateTable(revMetrics, 'Annual Revenue');\nconst prioritisedRev    = revMetrics.filter(m => m.icpScore === 'PRIORITISE'   && !['**TOTAL**', 'Other'].includes(m.segment)).map(m => m.segment).join(', ') || 'None';\nconst deprioritisedRev  = revMetrics.filter(m => m.icpScore === 'DEPRIORITISE' && !['**TOTAL**', 'Other'].includes(m.segment)).map(m => m.segment).join(', ') || 'None';\n\n// ============================================\n// PAGE: SALES REP PERFORMANCE\n// ============================================\n\nconst repMapData2 = {};\n[...wonData, ...lostData].forEach(row => {\n  const rep = safeStr(row['Opportunity.Owner_Name_C']) || 'Unknown';\n  if (!repMapData2[rep]) repMapData2[rep] = { won: [], lost: [] };\n  if (safeStr(row['Opportunity.Stage Name']) === 'Closed Won') repMapData2[rep].won.push(row);\n  else repMapData2[rep].lost.push(row);\n});\nconst repMetrics = [\n  ...Object.entries(repMapData2)\n    .map(([r, d]) => calculateSegmentMetrics(d.won, d.lost, r))\n    .sort((a, b) => b.wonCount - a.wonCount).slice(0, 15),\n  calculateSegmentMetrics(wonData, lostData, '**TOTAL**')\n];\nconst repTable = generateTable(repMetrics, 'Sales Rep');\n\n// ============================================\n// GONG CALLS ANALYSIS\n// ============================================\n\n// Separate by deal outcome\nconst gongWonAccts      = gongItems.filter(i => (i['Has Closed Won'] || '').toLowerCase() === 'yes' || (i['Deal Status'] || '') === 'CLOSED_WON');\nconst gongLostAccts     = gongItems.filter(i => (i['Deal Status'] || '') === 'CLOSED_LOST');\nconst gongPipelineAccts = gongItems.filter(i => (i['Deal Status'] || '').includes('PIPELINE'));\n\n// Call Outcome distribution\nconst outcomeMap = {};\ngongItems.forEach(i => {\n  const o = safeStr(i['Call Outcome']) || 'Unknown';\n  outcomeMap[o] = (outcomeMap[o] || 0) + 1;\n});\n\n// Call Outcome by win/loss\nconst wonOutcomeMap = {}, lostOutcomeMap = {};\ngongWonAccts.forEach(i  => { const o = safeStr(i['Call Outcome']) || 'Unknown'; wonOutcomeMap[o]  = (wonOutcomeMap[o]  || 0) + 1; });\ngongLostAccts.forEach(i => { const o = safeStr(i['Call Outcome']) || 'Unknown'; lostOutcomeMap[o] = (lostOutcomeMap[o] || 0) + 1; });\n\n// Call Type distribution\nconst callTypeMap = {};\ngongItems.forEach(i => {\n  const ct = safeStr(i['Call Type']) || 'Unknown';\n  callTypeMap[ct] = (callTypeMap[ct] || 0) + 1;\n});\n\n// Deal Risk distribution (overall + by win/loss)\nconst riskMap = {}, wonRiskMap = {}, lostRiskMap = {};\ngongItems.forEach(i       => { const r = safeStr(i['Deal Risk']) || 'Unknown'; riskMap[r]     = (riskMap[r]     || 0) + 1; });\ngongWonAccts.forEach(i    => { const r = safeStr(i['Deal Risk']) || 'Unknown'; wonRiskMap[r]  = (wonRiskMap[r]  || 0) + 1; });\ngongLostAccts.forEach(i   => { const r = safeStr(i['Deal Risk']) || 'Unknown'; lostRiskMap[r] = (lostRiskMap[r] || 0) + 1; });\n\n// Budget Signal\nconst budgetDiscussed    = gongItems.filter(i => safeStr(i['Budget Signal']) === 'DISCUSSED').length;\nconst budgetNotMentioned = gongItems.filter(i => safeStr(i['Budget Signal']) === 'NOT_MENTIONED').length;\nconst budgetWonDiscussed = gongWonAccts.filter(i  => safeStr(i['Budget Signal']) === 'DISCUSSED').length;\nconst budgetLostDiscussed= gongLostAccts.filter(i => safeStr(i['Budget Signal']) === 'DISCUSSED').length;\n\n// Pain Points by win/loss\nconst wonPainPoints  = gongWonAccts.map(i  => safeStr(i['pain_points'])).filter(Boolean);\nconst lostPainPoints = gongLostAccts.map(i => safeStr(i['pain_points'])).filter(Boolean);\n\n// Objections by win/loss\nconst wonObjections  = gongWonAccts.map(i  => safeStr(i['objections'])).filter(Boolean);\nconst lostObjections = gongLostAccts.map(i => safeStr(i['objections'])).filter(Boolean);\n\n// Competitor mentions\nconst competitorMentions = {};\ngongItems.forEach(i => {\n  const comps = safeStr(i['Competitors']);\n  if (!comps) return;\n  comps.split(',').forEach(c => {\n    const comp = c.trim();\n    if (comp && comp !== '' && comp.toLowerCase() !== 'none' && comp.toLowerCase() !== 'n/a') {\n      competitorMentions[comp] = (competitorMentions[comp] || 0) + 1;\n    }\n  });\n});\nconst topCompetitors = Object.entries(competitorMentions)\n  .sort((a, b) => b[1] - a[1])\n  .slice(0, 10);\n\n// Competitor by win/loss context\nconst compWinMap = {}, compLossMap = {};\ngongWonAccts.forEach(i => {\n  const comps = safeStr(i['Competitors']);\n  if (!comps) return;\n  comps.split(',').forEach(c => {\n    const comp = c.trim();\n    if (comp && comp !== '') compWinMap[comp] = (compWinMap[comp] || 0) + 1;\n  });\n});\ngongLostAccts.forEach(i => {\n  const comps = safeStr(i['Competitors']);\n  if (!comps) return;\n  comps.split(',').forEach(c => {\n    const comp = c.trim();\n    if (comp && comp !== '') compLossMap[comp] = (compLossMap[comp] || 0) + 1;\n  });\n});\n\n// ICP classification from Gong\nconst icpClassMap = {};\ngongItems.forEach(i => {\n  const icp = safeStr(i['ICP']) || 'Unknown';\n  icpClassMap[icp] = (icpClassMap[icp] || 0) + 1;\n});\n\n// Rep performance from Gong\nconst gongRepMap = {};\ngongItems.forEach(i => {\n  const rep = safeStr(i['Rep Name']) || 'Unknown';\n  if (rep === 'Unknown' || rep === '') return;\n  if (!gongRepMap[rep]) gongRepMap[rep] = { total: 0, won: 0, advancing: 0, stalled: 0 };\n  gongRepMap[rep].total++;\n  if ((i['Has Closed Won'] || '').toLowerCase() === 'yes') gongRepMap[rep].won++;\n  if (safeStr(i['Call Outcome']) === 'ADVANCING') gongRepMap[rep].advancing++;\n  if (safeStr(i['Call Outcome']) === 'STALLED') gongRepMap[rep].stalled++;\n});\n\n// Build Gong summary table\nconst buildOutcomeTable = () => {\n  const outcomes = ['ADVANCING', 'STALLED', 'LOST_SIGNAL', 'Unknown'];\n  let t = '| Call Outcome | All Calls | Won Accounts | Lost Accounts |\\n';\n  t += '|---|---|---|---|\\n';\n  outcomes.forEach(o => {\n    const total = outcomeMap[o] || 0;\n    const won   = wonOutcomeMap[o]  || 0;\n    const lost  = lostOutcomeMap[o] || 0;\n    if (total > 0) t += '| ' + o + ' | ' + total + ' | ' + won + ' | ' + lost + ' |\\n';\n  });\n  return t;\n};\n\nconst buildRiskTable = () => {\n  const risks = ['LOW', 'MEDIUM', 'HIGH', 'Unknown'];\n  let t = '| Deal Risk | All Calls | Won Accounts | Lost Accounts |\\n';\n  t += '|---|---|---|---|\\n';\n  risks.forEach(r => {\n    const total = riskMap[r] || 0;\n    const won   = wonRiskMap[r]  || 0;\n    const lost  = lostRiskMap[r] || 0;\n    if (total > 0) t += '| ' + r + ' | ' + total + ' | ' + won + ' | ' + lost + ' |\\n';\n  });\n  return t;\n};\n\nconst buildCompetitorTable = () => {\n  if (!topCompetitors.length) return '*No competitor mentions recorded in Gong data.*';\n  let t = '| Competitor | Total Mentions | Won Accounts | Lost Accounts |\\n';\n  t += '|---|---|---|---|\\n';\n  topCompetitors.forEach(([comp, count]) => {\n    const won  = compWinMap[comp]  || 0;\n    const lost = compLossMap[comp] || 0;\n    t += '| ' + comp + ' | ' + count + ' | ' + won + ' | ' + lost + ' |\\n';\n  });\n  return t;\n};\n\nconst gongOutcomeTable    = buildOutcomeTable();\nconst gongRiskTable       = buildRiskTable();\nconst gongCompetitorTable = buildCompetitorTable();\n\nconst gongCallTypeStr = Object.entries(callTypeMap).sort((a,b) => b[1]-a[1]).map(([k,v]) => k + ': ' + v).join(', ');\nconst gongICPStr      = Object.entries(icpClassMap).sort((a,b) => b[1]-a[1]).map(([k,v]) => k + ': ' + v).join(', ');\n\n// Format pain points list\nconst formatList = (arr, max) => {\n  if (!arr.length) return '*No data available.*';\n  return arr.slice(0, max).map((s, i) => (i + 1) + '. ' + s).join('\\n');\n};\n\n// ============================================\n// BUILD FINAL ANALYSIS REPORT\n// ============================================\n\nconst analysisReport = `\n===PAGE_BREAK===\n# ${CONFIG.productName.toUpperCase()} ICP INTELLIGENCE REPORT\n\n## Key Metrics\n\n| Metric | Value |\n|---|---|\n| Total CRM Records Analyzed | ${totalRecords} |\n| Closed Won | ${totalWon} (${pct(totalWon, totalRecords)}%) |\n| Closed Lost | ${totalLost} (${pct(totalLost, totalRecords)}%) |\n| Overall Conversion Rate | ${overallCvR.toFixed(1)}% |\n| Total ARR (Closed Won) | ${currencyK(totalARRAll)} |\n| Average ARR (Closed Won) | ${currencyK(avgARRAll)} |\n| Gong Calls Analyzed | ${gongItems.length} |\n| Gong: Won Account Calls | ${gongWonAccts.length} |\n| Gong: Lost Account Calls | ${gongLostAccts.length} |\n| Gong: Pipeline Calls | ${gongPipelineAccts.length} |\n\n### About This Report\nCRM data: ${totalRecords} standard Salesforce closed opportunities (Amendments excluded). Gong data: ${gongItems.length} recorded sales calls filtered to ${CONFIG.productName}. Together they form the ${CONFIG.productName} ICP Intelligence Report.\n\n[AI: Write a 2-sentence executive summary of the ${CONFIG.productName} ICP profile based on all data. Name the single most important finding.]\n\n===PAGE_BREAK===\n# ICP CLUSTER DEFINITIONS\n\n[AI: Define exactly 3 named ICP clusters for ${CONFIG.productName}. Name each cluster with a memorable title (e.g. \"The Compliance-Driven Enterprise\", \"The Fast-Scaling Mid-Market Team\"). For each cluster, write a short definition (2-3 sentences) covering: company profile, buying trigger, primary pain point, and expected ARR. Use the CRM and Gong data as evidence. Format each as a ### named subsection so it becomes a distinct callout card.]\n\n===PAGE_BREAK===\n# EXECUTIVE SUMMARY\n\n## Dataset Overview\n\n| Category | Records | % of Total | Status |\n|---|---|---|---|\n| **TOTAL CRM RECORDS** | **${totalDataset}** | **100%** | -- |\n| Closed Won (All) | ${wonDataRaw.length} | ${pct(wonDataRaw.length, totalDataset)}% | -- |\n|   Amendment Wins (excluded) | ${amendExWon} | ${pct(amendExWon, totalDataset)}% | Excluded |\n|   Standard Wins (analyzed) | ${totalWon} | ${pct(totalWon, totalDataset)}% | IN SCOPE |\n| Closed Lost (All) | ${lostDataRaw.length} | ${pct(lostDataRaw.length, totalDataset)}% | -- |\n|   Amendment Lost (excluded) | ${amendExLost} | ${pct(amendExLost, totalDataset)}% | Excluded |\n|   Standard Lost (analyzed) | ${totalLost} | ${pct(totalLost, totalDataset)}% | IN SCOPE |\n\n**ICP Score formula:** (0.6 x CvR_normalized) + (0.4 x AvgARR_normalized). Index = score x 100. Above 110 = PRIORITISE. Below 90 = DEPRIORITISE.\n\n## Data Quality\n- ARR data available: ${allARR.length}/${totalWon} won records (${pct(allARR.length, totalWon)}%)\n- Size/FTE field populated: ${enrichRate('Size')}%\n- Industry (2) enriched: ${enrichRate('Industry (2)')}%\n- State populated: ${enrichRate('State', 1)}%\n- Country populated: ${enrichRate('Country')}%\n- Company Type populated: ${enrichRate('Company Type')}%\n- Annual Revenue populated: ${enrichRate('Annual Revenue')}%\n- Gong calls with pain points: ${gongItems.filter(i => safeStr(i['pain_points']).length > 5).length}/${gongItems.length}\n\n### Key Findings\n\n[AI: List 5-6 bullet points of the most critical findings across CRM and Gong data. Cite specific numbers. Lead with the most commercially important finding.]\n\n### Top Recommendations\n\n[AI: Write 4 numbered recommendations (01, 02, 03, 04) as actionable outbound targeting instructions for ${CONFIG.productName}. Each should cite data and be specific enough for an SDR to act on immediately.]\n\n===PAGE_BREAK===\n# FTE BAND ANALYSIS\n\n${fteTable}\n\n${fteGrouped.otherNote}\n\n## ICP Score Summary\n- **PRIORITISE (Index > 110):** ${prioritisedFTE}\n- **DEPRIORITISE (Index < 90):** ${deprioritisedFTE}\n\n### Top FTE Insights\n- **Highest CvR:** ${topFTEByCvR ? topFTEByCvR.segment + ' at ' + topFTEByCvR.cvr : 'N/A'}\n- **Highest Avg ARR:** ${topFTEByARR ? topFTEByARR.segment + ' at ' + topFTEByARR.avgARR : 'N/A'}\n- **Highest Volume:** ${topFTEByVol ? topFTEByVol.segment + ' with ' + topFTEByVol.wonCount + ' wins' : 'N/A'}\n\n[AI: Write 3-4 insights about FTE patterns for ${CONFIG.productName} buyers. Name each insight as a ### subsection (e.g. \"### Mid-Market Dominance\"). Compare each FTE band to TOTAL. Which size company drives the most volume vs highest ARR? Does FTE band correlate with the complexity ${CONFIG.productName} solves? Cite the Index numbers. End with one action sentence per subsection.]\n\n===PAGE_BREAK===\n# GEOGRAPHY ANALYSIS\n\n## US State Breakdown\n\n${stateTable}\n\n${stateGrouped.otherNote}\n\n## ICP Score Summary (US States)\n- **PRIORITISE:** ${prioritisedState}\n- **DEPRIORITISE:** ${deprioritisedState}\n\n## Country Breakdown\n\n${countryTable}\n\n[AI: Write 3 named ### subsection insights about geographic concentration. Example subsections: \"### US Dominance\", \"### Financial Center Clustering\", \"### International Opportunity\". Cite the top 3 US states by wins and Index score. Identify which states have the best CvR x ARR combination. Note any international patterns. Provide 2 specific geographic targeting actions.]\n\n===PAGE_BREAK===\n# INDUSTRY ANALYSIS\n\n${indTable}\n\n${indOtherNote}\n\n## ICP Score Summary\n- **PRIORITISE:** ${prioritisedInd}\n- **DEPRIORITISE:** ${deprioritisedInd}\n\n[AI: Write 4 named ### subsection insights about industry patterns. Example: \"### Financial Services Stronghold\", \"### Technology High-Conversion\". Product context: ${CONFIG.productContext} Reference specific Index scores. For each prioritised industry, write 1 sentence on why they buy ${CONFIG.productName}. Provide 2 specific industry-targeting actions.]\n\n===PAGE_BREAK===\n# COMPANY TYPE ANALYSIS\n\n${ownTable}\n\n${ownGrouped.otherNote}\n\n## ICP Score Summary\n- **PRIORITISE:** ${prioritisedOwn}\n- **DEPRIORITISE:** ${deprioritisedOwn}\n\n[AI: Write 3 named ### subsection insights about company type patterns. Example: \"### Public Company Premium\", \"### Private Company Pipeline\". Key context: ${CONFIG.productContext} Does the data confirm public companies show higher ARR? Do private companies show higher volume? What does this mean for outbound segmentation? Reference specific Index scores and cite CvR vs ARR trade-offs.]\n\n===PAGE_BREAK===\n# CUSTOMER TYPE ANALYSIS\n\n${custTable}\n\n[AI: Write 2 named ### subsection insights. Example: \"### New Logo Acquisition Engine\", \"### Expansion Revenue Opportunity\". Analyze New Customer vs Existing Customer split. Which motion produces higher ARR? What does the CvR differential indicate? Should outbound focus on net new logos or expansion within existing customer accounts? Be specific about the implications for SDR vs AE targeting. Cite the Index scores.]\n\n===PAGE_BREAK===\n# ANNUAL REVENUE BAND ANALYSIS\n\n${revTable}\n\n${revGrouped ? revGrouped.otherNote || '' : ''}\n\n## ICP Score Summary\n- **PRIORITISE:** ${prioritisedRev}\n- **DEPRIORITISE:** ${deprioritisedRev}\n\n[AI: Write 3 named ### subsection insights about revenue band patterns. Example: \"### Mid-Market Sweet Spot\", \"### Enterprise ARR Premium\". What company revenue range dominates the win list? Does higher revenue correlate with higher deal ARR as expected? Is there a clear targeting threshold (e.g. $50M+ revenue companies)? Reference specific Index scores. What should be the minimum revenue threshold for outbound targeting?]\n\n===PAGE_BREAK===\n# SALES REP PERFORMANCE\n\n${repTable}\n\n[AI: Write 3 named ### subsection insights about rep performance patterns. Example: \"### Top Performer Profile\", \"### CvR Leaders vs Volume Leaders\". Note that territory and segment assignment drive variance -- avoid pure ranking framing. Which reps show the strongest combination of CvR and Avg ARR? Are there reps who win big deals even with lower CvR (high ARR specialists)? What coaching or territory optimization actions does the data suggest? What does top performer behavior reveal about the ideal prospect profile?]\n\n===PAGE_BREAK===\n# CONVERSATION INTELLIGENCE\n\n## Gong Calls Overview\n- **Total ${CONFIG.productName} calls analyzed:** ${gongItems.length}\n- **Won account calls:** ${gongWonAccts.length} (${pct(gongWonAccts.length, gongItems.length)}%)\n- **Lost account calls:** ${gongLostAccts.length} (${pct(gongLostAccts.length, gongItems.length)}%)\n- **Pipeline calls:** ${gongPipelineAccts.length} (${pct(gongPipelineAccts.length, gongItems.length)}%)\n- **Call type breakdown:** ${gongCallTypeStr}\n\n## Call Outcome Distribution\n\n${gongOutcomeTable}\n\n- **Budget discussed:** ${budgetDiscussed} calls (${pct(budgetDiscussed, gongItems.length)}% of all calls)\n  - Won accounts: ${budgetWonDiscussed} calls (${pct(budgetWonDiscussed, gongWonAccts.length)}% of won-account calls)\n  - Lost accounts: ${budgetLostDiscussed} calls (${pct(budgetLostDiscussed, gongLostAccts.length)}% of lost-account calls)\n\n## Deal Risk Distribution\n\n${gongRiskTable}\n\n- **ICP classification breakdown:** ${gongICPStr || 'Not available'}\n\n[AI: Write 3 named ### subsection insights from the Gong conversation intelligence data. Example: \"### Advancing Calls Predict Wins\", \"### Budget Conversation Timing\", \"### Deal Risk as a Qualifier\". Analyze: (1) Do ADVANCING outcomes correlate strongly with won accounts vs lost? (2) Is budget being discussed earlier in won vs lost accounts? (3) What does deal risk distribution tell us about qualification quality? Cite the specific numbers from the tables above. Each subsection should end with one actionable recommendation for the sales team.]\n\n===PAGE_BREAK===\n# VOICE OF CUSTOMER - PAIN POINTS & OBJECTIONS\n\n## Pain Points from Won Accounts (${gongWonAccts.length} calls)\n\n${formatList(wonPainPoints, 15)}\n\n## Pain Points from Lost Accounts (${gongLostAccts.length} calls)\n\n${formatList(lostPainPoints, 15)}\n\n## Objections from Won Accounts\n\n${formatList(wonObjections, 10)}\n\n## Objections from Lost Accounts\n\n${formatList(lostObjections, 10)}\n\n[AI: Write 4 named ### subsection insights from the pain points and objections data. Example: \"### The Excel Escape Motive\", \"### Compliance Urgency Driver\", \"### Status Quo Objection Pattern\", \"### Overcoming the In-House Preference\". For each: (1) identify the most common pain point pattern, (2) explain what it means for positioning, (3) provide a specific talk track or objection-handling approach. Note key differences between pain points in won vs lost accounts -- what pain points are most predictive of a win? What objections are deal-killers vs handleable?]\n\n===PAGE_BREAK===\n# COMPETITIVE INTELLIGENCE\n\n## Competitor Mentions in Gong Calls\n\n${gongCompetitorTable}\n\n[AI: Write 3 named ### subsection insights from the competitor data. Example: \"### Competitive Battleground\", \"### Displacement Opportunity\", \"### Moat Defense\". If competitor mentions are sparse, note this as a data gap and extrapolate from the pain points data what competitors prospects are likely using (start from: ${CONFIG.knownCompetitors}). For each named competitor: what is their market position, what pain points do they leave unaddressed that ${CONFIG.productName} can win on? Provide specific competitive talk tracks. Note which competitors appear in won accounts (we beat them) vs lost accounts (we lost to them).]\n\n===PAGE_BREAK===\n# DEAL SIGNAL ANALYSIS\n\n## Win Signals vs Loss Signals\n\n[AI: Write 4 named ### subsection insights analyzing what Gong data predicts wins vs losses for ${CONFIG.productName}. Example: \"### The Three Win Signals\", \"### Red Flags That Kill Deals\", \"### Discovery Quality Predictor\", \"### Budget Signal Timing\". Draw from: call outcomes (ADVANCING vs STALLED in won accounts), deal risk levels in won vs lost accounts, budget signal timing, pain point specificity in won vs lost accounts, call types (do Discovery calls in won accounts look different from lost?). Each subsection should produce a concrete qualification criteria or signal that SDRs and AEs can use. Format as: Signal -> What it means -> What to do about it.]\n\n===PAGE_BREAK===\n# ANTI-ICP HARD STOPS\n\n[AI: Write 5-6 hard stop rules based on the combined CRM and Gong data. Each is a non-negotiable disqualifier -- segments that consistently produce low CvR AND low ARR, or where Gong data shows deal risk is consistently HIGH and outcomes are STALLED/LOST. Format each as a named ### subsection rule. Example format:\n\n### HARD STOP 01: Micro-Businesses Under 10 FTEs\nData: X opps, Y% CvR vs Z% overall. Index: NN. These accounts show no viable need for ${CONFIG.productName}. Do not engage.\n\n### HARD STOP 02: [Segment]\n...\n\nBase these on actual DEPRIORITISE segments from the tables and loss patterns from Gong. Be specific with data citations. Include a \"Why it matters\" sentence for SDR coaching.]\n\n===PAGE_BREAK===\n# BUYER PERSONA\n\n[AI: Create one named buyer persona for the ideal ${CONFIG.productName} customer. Name them something realistic (e.g. \"Taylor, VP of Finance at a 500-person public fintech in Texas\"). Include these sections as ### subsections:\n\n### Who Taylor Is\nRole, company profile (industry, FTE range, company type, revenue band, geography), team structure\n\n### What Keeps Taylor Up at Night\nTop 3 pain points (draw from Gong pain_points data for won accounts -- cite real examples from the data)\n\n### What Triggers the Search for ${CONFIG.productName}\nKey buying triggers (e.g. new compliance requirement, leadership change, funding event, a process outgrowing spreadsheets)\n\n### How Taylor Evaluates Solutions\nDecision criteria, stakeholders involved (draw from Gong multi-threading data), evaluation timeline\n\n### How to Win Taylor\nTop 3 talk tracks based on Gong won account data. What messaging converts. What to avoid saying.\n\n### Secondary Persona\nBriefly describe one secondary persona (e.g. a channel partner or a different buying role) in 3-4 sentences.]\n\n===PAGE_BREAK===\n# SDR TARGETING BRIEF\n\n[AI: Write a one-page action brief for ${CONFIG.productName} SDRs. Format as:\n\n### Top 3 ICP Profiles to Target NOW\nUse the PRIORITISE segments from FTE, industry, company type, and revenue data. Be specific: \"[Company type] [industry] companies with [FTE band], revenue [band], in [states].\" Cite Index scores.\n\n### Top 3 Account Types to Avoid\nBased on DEPRIORITISE segments and HARD STOPS. Cite specific data.\n\n### Discovery Questions That Predict Wins\nBased on Gong pain points from won accounts, write 5 qualifying questions SDRs should ask to identify high-fit prospects. Each question should map to a confirmed win trigger from the data.\n\n### Talk Tracks Based on Gong Intel\nBased on the most common pain points in won accounts, write 3 one-liner positioning statements SDRs can use in cold outreach. Specific, data-backed, no generic claims.\n\n### Qualification Scorecard\nA simple 5-question yes/no scorecard SDRs can use to score a prospect. Each \"yes\" = +1 point. Score 4-5 = fast-track to AE. Score 2-3 = nurture. Score 0-1 = disqualify. Base the questions on the strongest win signals from the data.]\n\n===PAGE_BREAK===\n# ICP DEFINITION & RECOMMENDATIONS\n\n## Tier 1 - PRIORITISE (Strongest ICP)\n[AI: Define the ideal ${CONFIG.productName} outbound target based on ALL data above]\n- **FTE Range:** [AI: specify based on highest Index scores]\n- **Geography:** [AI: specify top US states + international markets]\n- **Industry:** [AI: specify top industries by Index]\n- **Company Type:** [AI: specify -- note public, private and PE-backed dynamics]\n- **Revenue Band:** [AI: specify]\n- **Customer Motion:** [AI: New vs Expansion recommendation]\n\n## Tier 2 - NEUTRAL (Good Prospects)\n[AI: Define Tier 2 criteria with specific segment details and rationale]\n\n## Tier 3 - Avoid (DEPRIORITISE)\n[AI: Define what to deprioritize based on data, with specific segment references and data backing]\n\n### Top 4 Recommendations\n\n[AI: Write 4 numbered recommendations (01, 02, 03, 04) combining CRM ICP scores with Gong intelligence. Each should be specific, data-backed, and directly actionable for outbound. Format:\n01 [Action verb] [specific target] because [data evidence: cite CvR%, ARR, Index, or Gong signal].\n02 ...\n03 ...\n04 ...]\n\n===PAGE_BREAK===\n# APPENDIX: METHODOLOGY\n\n## ICP Score Calculation\nICP Score = (0.6 x CvR_normalized) + (0.4 x AvgARR_normalized)\nIndex = ICP Score x 100\n\nWhere:\n- CvR_normalized = Segment CvR / Overall CvR (${overallCvR.toFixed(1)}%)\n- AvgARR_normalized = Segment Avg ARR / Overall Avg ARR (${currencyK(overallAvgARR)})\n\n## Classification Thresholds\n- PRIORITISE (^): Index > 110 (more than 10% above overall average)\n- NEUTRAL (--): Index 90-110 (within 10% of overall average)\n- DEPRIORITISE (v): Index < 90 (more than 10% below overall average)\n\n## Minimum Sample Thresholds\n- FTE Bands: ${FTE_MIN} opportunities\n- US States: ${GEO_MIN} opportunities\n- Industries: ${IND_MIN} opportunities\n- Company Types: ${OWN_MIN} opportunities\n- Revenue Bands: ${REV_MIN} opportunities\n\n## Data Sources\n- CRM: Clay export of Salesforce closed opportunities for ${CONFIG.productName}\n- Gong: Recorded sales calls filtered to the configured product line\n- Amendment record types excluded (contract changes, not new acquisition)\n- Empty/null values excluded from averages\n\n## Data Limitations\n- No Win/Loss Reason field in CRM dataset\n- No GRR or Profit Margin fields in CRM dataset\n- Gong pain_points and objections are free-text (not structured tags)\n- Competitor data from Gong is based on what reps logged (may be incomplete)\n`;\n\nreturn [{\n  json: {\n    analysisReport,\n    config: CONFIG,\n    metadata: {\n      totalDataset,\n      totalWon,\n      totalLost,\n      totalAnalyzed: totalRecords,\n      overallCvR: overallCvR.toFixed(1),\n      overallAvgARR: currencyK(overallAvgARR),\n      amendmentExcluded: { won: amendExWon, lost: amendExLost },\n      gongStats: {\n        total: gongItems.length,\n        wonAccounts: gongWonAccts.length,\n        lostAccounts: gongLostAccts.length,\n        pipeline: gongPipelineAccts.length,\n        topCompetitors: topCompetitors.slice(0, 5).map(([c, n]) => c + ' (' + n + ')')\n      }\n    }\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        416
+      ],
+      "id": "703c5cf1-0d54-4915-8c04-e54410bad67d",
+      "name": "Pre-Calculate Metrics"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Generate the {{ $json.config.productName }} ICP Intelligence Report using these pre-calculated metrics:\n\n{{ $json.analysisReport }}\n\n## YOUR TASK\n\n1. **Keep all tables exactly as provided** — they include ALL columns including the Index column\n2. **Replace ALL [AI: ...] placeholders** with substantive, data-driven insights\n3. **Maintain ===PAGE_BREAK=== markers** — they control page breaks in the final document\n4. **Always compare segments to the TOTAL row** when analyzing tables\n5. **Reference ICP Scores and Index numbers** in every recommendation\n6. **Amendment records are EXCLUDED** — standard new business analysis only\n\n## VISUAL FORMAT — CRITICAL\n\nThis report uses Gamma.app for rendering. Follow these rules EXACTLY:\n\n### Named Callout Cards\n- Every key insight MUST have a memorable ### subsection name\n- Good examples: \"### Mid-Market Dominance\", \"### Public Company Premium\", \"### The Excel Escape Motive\"\n- Bad example: just writing a paragraph with no heading\n- The ### name becomes a distinct colored card in the rendered report\n\n### Numbered Recommendations\n- ALL recommendations use 01, 02, 03, 04 format (not bullet points)\n- Example: \"01 Target public financial services companies with 200-500 FTEs...\"\n\n### Buyer Persona\n- Use a realistic first name (e.g. Taylor, Sarah, Marcus)\n- Write as if describing a real person you have met\n- Every persona element must connect to real data from the tables\n\n### Anti-ICP Hard Stops\n- State these as absolute rules with data backing\n- SDRs must be able to use these to disqualify within 2 minutes\n- Format: HARD STOP 01: [Rule]. Data: [evidence]. Do not engage.\n\n### SDR Targeting Brief\n- Must be immediately usable by an SDR reading it cold\n- No generic advice — cite specific segments, Index scores, and Gong signals\n\n## KEY PRODUCT CONTEXT\n- {{ $json.config.productName }}: {{ $json.config.productContext }}\n- The Gong data fills in the WHY that the CRM data cannot show (no Win/Loss Reason field available)\n- Pain points in won accounts = what to sell on; objections in lost accounts = what to handle\n\n## WRITING RULES\n- Do NOT use emoji\n- Use professional, data-driven language\n- Be direct and actionable\n- Always cite specific numbers (CvR%, ARR, Index, call counts)\n- Frame all insights as actions\n- When competitor data is sparse, note it honestly and extrapolate from pain points\n\n## OUTPUT FORMAT\nOutput the complete report with ALL ===PAGE_BREAK=== markers intact.\nDo NOT strip any table columns.\nDo NOT add decorative formatting beyond ### named subsections.\nEvery [AI: ...] placeholder must be replaced — do not leave any placeholders in the output.",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "=You are a B2B GTM analyst creating an ICP Intelligence Report for {{ $json.config.companyName }} ({{ $json.config.productName }}).\n\nPRODUCT CONTEXT:\n{{ $json.config.productContext }}\n\nMETHODOLOGY:\n- Data is pre-aggregated from Salesforce opportunities (Closed Won vs Closed Lost)\n- Metrics include Conversion Rate (CvR) and Average ARR\n- ICP Score = combination of CvR and Avg ARR\n\nKEY INTERPRETATION LOGIC:\n- High CvR + High ARR = strongest ICP (prioritize)\n- High CvR + Low ARR = efficient but lower value (volume play)\n- Low CvR + High ARR = valuable but hard to win (fix positioning or qualification)\n- Low CvR + Low ARR = weak fit (deprioritize)\n\nWRITING RULES:\n- Do NOT use emoji\n- Use professional, data-driven language\n- Be direct and actionable\n- Always cite specific numbers from tables\n- Frame insights as actions"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -80,
+        416
+      ],
+      "id": "30353d22-2cba-4335-89a4-99945cd5bd18",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "anthropic/claude-opus-4-5",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        -288,
+        672
+      ],
+      "id": "b11474cf-5f5a-4369-854a-ac5b47d50b8a",
+      "name": "OpenRouter Chat Model"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-pro",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        672
+      ],
+      "id": "4ebbe5c6-566c-461f-94f7-caf69b28e3b1",
+      "name": "Gemini Chat Model (Fallback)"
+    },
+    {
+      "parameters": {
+        "operation": "createFromText",
+        "content": "={{ $json.output }}",
+        "name": "={{ $('Pre-Calculate Metrics').first().json.config.productName }} ICP Intelligence Report {{ $now.toFormat('yyyy-MM-dd') }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "root",
+          "mode": "list",
+          "cachedResultName": "/ (Root folder)",
+          "cachedResultUrl": "https://drive.google.com/drive"
+        },
+        "options": {
+          "convertToGoogleDocument": true
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        144,
+        208
+      ],
+      "id": "5fbf5d83-3657-4812-92a4-261fd27fd863",
+      "name": "Create Google Doc (Backup)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://public-api.gamma.app/v1.0/generations",
+        "sendHeaders": false,
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "inputText",
+              "value": "={{ $json.output.replace(/===PAGE_BREAK===/g, '\\n---\\n') }}"
+            },
+            {
+              "name": "textMode",
+              "value": "preserve"
+            },
+            {
+              "name": "format",
+              "value": "document"
+            },
+            {
+              "name": "cardSplit",
+              "value": "inputTextBreaks"
+            },
+            {
+              "name": "additionalInstructions",
+              "value": "=Create a professional A4 ICP Intelligence Report for {{ $('Pre-Calculate Metrics').first().json.config.productName }}. This is a GTM intelligence document.\n\nVISUAL RULES:\n1. Each page section (separated by ---) becomes a distinct slide/card\n2. ### subsection headings become distinct COLORED callout cards within each page — preserve every ### heading exactly as written\n3. Data tables must be FULL WIDTH with all columns visible — do not collapse or abbreviate\n4. Numbers cited in text (CvR%, ARR, Index) should be displayed prominently\n5. The cover page (first section) should feature the key metrics table as large, scannable numbers\n6. Anti-ICP Hard Stops and SDR Targeting Brief pages should use high-contrast styling\n7. Buyer Persona page should feel like a profile card\n\nCONTENT RULES:\n1. Preserve ALL table columns including the Index column\n2. Preserve ALL ### named subsection headings — they are critical for the callout card visual\n3. Do not rewrite or summarize the AI-generated insights — render them exactly as provided\n4. Numbered recommendations (01, 02, 03) should be visually distinct\n\nDOCUMENT STYLE:\n- Professional, data-driven, analytical\n- No decorative elements or stock images\n- Clean typography, high information density\n- This is for CMO, VP Sales, RevOps leadership"
+            },
+            {
+              "name": "textOptions.amount",
+              "value": "detailed"
+            },
+            {
+              "name": "textOptions.tone",
+              "value": "professional, analytical, data-driven"
+            },
+            {
+              "name": "textOptions.audience",
+              "value": "CMO, CEO, VP Sales, RevOps Leadership"
+            },
+            {
+              "name": "imageOptions.source",
+              "value": "noImages"
+            },
+            {
+              "name": "cardOptions.dimensions",
+              "value": "a4"
+            },
+            {
+              "name": "sharingOptions.externalAccess",
+              "value": "view"
+            },
+            {
+              "name": "exportAs",
+              "value": "pdf"
+            },
+            {
+              "name": "numCards",
+              "value": "={{ 35 }}"
+            }
+          ]
+        },
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        144,
+        624
+      ],
+      "id": "c9219353-18a7-478b-bbe4-8a98666a18f7",
+      "name": "Gamma Create Document"
+    },
+    {
+      "parameters": {
+        "amount": 15
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        368,
+        624
+      ],
+      "id": "a3efcbd2-7420-420b-94eb-023ed59be41c",
+      "name": "Wait 15s",
+      "webhookId": "653736b6-e5cb-4173-95b7-0bef771cf7c7"
+    },
+    {
+      "parameters": {
+        "url": "=https://public-api.gamma.app/v1.0/generations/{{ $json.generationId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        592,
+        624
+      ],
+      "id": "217b139a-ab83-4012-8cce-6baf8a54eff3",
+      "name": "Gamma Get Status"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "status-check",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        816,
+        624
+      ],
+      "id": "fd8d8b85-0fd4-454f-beab-9fa9d89b2da6",
+      "name": "If Completed"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "gamma-url",
+              "name": "gammaUrl",
+              "value": "={{ $json.gammaUrl }}",
+              "type": "string"
+            },
+            {
+              "id": "generation-id",
+              "name": "generationId",
+              "value": "={{ $json.generationId }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1040,
+        416
+      ],
+      "id": "c6003a33-231a-49a5-acc6-9f118f520b6f",
+      "name": "Extract Gamma URL"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#your-channel"
+        },
+        "text": "={{ $('Pre-Calculate Metrics').first().json.config.productName }} ICP Intelligence Report Ready\n\nGamma Document: {{ $json.gammaUrl }}\nBackup Doc: https://docs.google.com/document/d/{{ $('Create Google Doc (Backup)').first().json.id }}\n\nCRM Analysis: {{ $('Pre-Calculate Metrics').first().json.metadata.totalWon }} Won / {{ $('Pre-Calculate Metrics').first().json.metadata.totalLost }} Lost | CvR: {{ $('Pre-Calculate Metrics').first().json.metadata.overallCvR }}% | Avg ARR: {{ $('Pre-Calculate Metrics').first().json.metadata.overallAvgARR }}\nGong Intel: {{ $('Pre-Calculate Metrics').first().json.metadata.gongStats.total }} calls analyzed ({{ $('Pre-Calculate Metrics').first().json.metadata.gongStats.wonAccounts }} won-account / {{ $('Pre-Calculate Metrics').first().json.metadata.gongStats.lostAccounts }} lost-account)\n\nReport includes: ICP Clusters, FTE/Geo/Industry/Company Type/Revenue analysis, Conversation Intelligence, Voice of Customer, Competitive Intel, Anti-ICP Hard Stops, Buyer Persona, SDR Targeting Brief",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        1264,
+        416
+      ],
+      "id": "09a57770-f99f-4ff7-9f34-d60293db8515",
+      "name": "Send to Slack",
+      "webhookId": "327c3beb-d333-42a5-9a0e-e2cfc9379e84"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read CRM Data",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Gong Calls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read CRM Data": {
+      "main": [
+        [
+          {
+            "node": "Label CRM Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Label CRM Data": {
+      "main": [
+        [
+          {
+            "node": "Merge CRM + Gong",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Gong Calls": {
+      "main": [
+        [
+          {
+            "node": "Label Gong Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Label Gong Data": {
+      "main": [
+        [
+          {
+            "node": "Merge CRM + Gong",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge CRM + Gong": {
+      "main": [
+        [
+          {
+            "node": "Pre-Calculate Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pre-Calculate Metrics": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Create Google Doc (Backup)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Gamma Create Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Chat Model (Fallback)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Gamma Create Document": {
+      "main": [
+        [
+          {
+            "node": "Wait 15s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 15s": {
+      "main": [
+        [
+          {
+            "node": "Gamma Get Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gamma Get Status": {
+      "main": [
+        [
+          {
+            "node": "If Completed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Completed": {
+      "main": [
+        [
+          {
+            "node": "Extract Gamma URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait 15s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Gamma URL": {
+      "main": [
+        [
+          {
+            "node": "Send to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  }
+}
